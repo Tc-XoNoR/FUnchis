@@ -96,6 +96,8 @@ python3 Funchis.py http://target.com \
 
 ## 🔮 Roadmap
 
+- [x] Content-Type fuzzing and MIME validation bypass
+
 - [ ] Extend support to other backends
 
 - [ ] Advanced filename-based attack techniques:
@@ -105,13 +107,17 @@ python3 Funchis.py http://target.com \
   - Double extensions (`shell.php.png`, `shell.png.php`)
   - Uncommon extensions and parsing inconsistencies
 
-- [ ] Content-Type fuzzing and MIME validation bypass
-
 - [ ] Aggressive mode:
   - Automated filter evasion techniques
   - Edge-case parsing behavior (e.g. quotes, null bytes, separators)
 
 - [ ] Improve detection of server-side file renaming logic and response analysis
+
+---
+
+## 📋 Changelog
+
+See [CHANGELOG.md](CHANGELOG.md)
 
 ---
 
