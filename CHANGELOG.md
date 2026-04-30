@@ -1,6 +1,25 @@
 ## 📋 Changelog
 
-### v2.0
+### v2.1  -  2026-04-30]
+
+#### Added
+
+- Added `--bypass` mode to test filename-based upload bypass techniques, including double extensions and extension parsing edge cases such as encoded characters, null byte patterns, separators and uncommon PHP extensions.
+- Added `--aggressive` mode to force FULL filename guessing when broader lookup coverage is needed, even if a specific naming strategy was previously detected.
+
+#### Changed
+
+- Improved filename lookup reliability: failed checks no longer overwrite previously detected file naming strategies, preventing false `Guessing Filename failed` results.
+- When multiple naming strategies are detected, FUnchis now falls back to FULL filename guessing to reduce the risk of missing uploaded files.
+
+#### Fixed
+
+- Fixed a filename guessing bug where a failed lookup in the last loop iteration could overwrite a previously valid detection result, causing FUnchis to incorrectly report `Guessing Filename failed` and skip the file lookup phase.
+- Fixed filename lookup state handling by introducing a `FAILED` fallback result and updating the detected naming strategy only when a real stored filename is found.
+
+---
+
+### v2.0  -   2026-04-24
 
 #### Added
 - Added adaptive filename guessing based on the server-side filename storage strategy.

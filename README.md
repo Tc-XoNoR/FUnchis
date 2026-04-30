@@ -50,11 +50,15 @@ python3 Funchis.py <URL> [OPTIONS]
 
 ### Options
 
-- `--cookies` → cookies to include in the session, for example `"PHPSESSID=xxx, TOKEN=yyy"`
-- `-x, --proxy` → proxy address, for example `127.0.0.1:8080`
-- `--csrf` → refresh CSRF token before each request
-- `-u, --upload` → upload directory to probe, for example `/uploads/`
-- `-v, --verbose` → enable verbose output
+### Options
+
+`--cookies` → cookies to include in the session, e.g. "PHPSESSID=xxx, TOKEN=yyy"  
+`-x`, `--proxy` → proxy address, e.g. 127.0.0.1:8080  
+`--csrf` → refresh CSRF token before each request  
+`-u`, `--upload` → upload directory to probe, e.g. /uploads/  
+`-v`, `--verbose` → increase output verbosity  
+`-A`, `--aggressive` → force FULL filename guessing (may generate many requests)  
+`--bypass` → enable filename-based bypass techniques
 
 ---
 
@@ -65,12 +69,11 @@ python3 Funchis.py http://target.com/upload.php
 ```
 
 ```bash
-python3 Funchis.py http://target.com \
-  --cookies "PHPSESSID=abcd1234" \
-  -x 127.0.0.1:8080 \
-  --csrf \
-  --upload files/ \
-  -v  
+#Basic scan: detect allowed extensions and try file access in upload directory
+python3 Funchis.py http://target.com/upload.php --upload uploads/ -v
+
+#Advanced scan: authenticated context + proxy + CSRF handling + aggressive filename guessing + bypass techniques
+python3 Funchis.py http://target.com --cookies "PHPSESSID=abcd1234" -x 127.0.0.1:8080 --csrf --upload files/ -A --bypass -v
 ```
 
 ---
@@ -80,7 +83,6 @@ python3 Funchis.py http://target.com \
 - Designed for HTML-based upload forms (no JS handling)
 - Heuristic-based detection (may produce false positives/negatives)
 - Focused on PHP-based applications
-- Advanced bypass techniques not yet implemented
 
 ---
 
@@ -91,12 +93,9 @@ python3 Funchis.py http://target.com \
 - [ ] Extend support to other backends
 - [ ] Advanced filename-based attack techniques:
   - Injection via filename (e.g. SQL injection, command injection)
-- [ ] Advanced extension bypass techniques:
+- [X] Advanced extension bypass techniques:
   - Double extensions (`shell.php.png`, `shell.png.php`)
   - Uncommon extensions and parsing inconsistencies
-- [ ] Aggressive mode:
-  - Automated filter evasion techniques
-  - Edge-case parsing behavior (e.g. quotes, null bytes, separators)
 
 ---
 
