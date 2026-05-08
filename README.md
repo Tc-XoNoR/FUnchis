@@ -11,7 +11,7 @@ FUnchis is a Python tool designed to test file upload functionalities and identi
 ## 🚀 Features
 
 - Automatic upload form discovery through HTML parsing
-- Baseline request generation using a valid PNG file
+- Baseline request generation using a valid file type selected with `--image-type`
 - MIME-type fuzzing using real minimal file contents / magic bytes:
   - JPEG, GIF, PNG, WebP, SVG, BMP, ICO, PDF
 - Extension fuzzing for potentially dangerous PHP-related extensions:
@@ -26,8 +26,9 @@ FUnchis is a Python tool designed to test file upload functionalities and identi
 ## 🧠 How It Works
 
 - Extracts upload form parameters
-- Sends a valid request (PNG) as baseline
-- Uploads a polyglot payload (PNG + PHP)
+- Sends a valid upload request as baseline
+- Tests different MIME types using real minimal file contents
+- Uploads PHP polyglot payloads
 - Compares responses to detect filters
 - Identifies allowed extensions
 - Attempts file access and execution
@@ -50,12 +51,11 @@ python3 Funchis.py <URL> [OPTIONS]
 
 ### Options
 
-### Options
-
-`--cookies` → cookies to include in the session, e.g. "PHPSESSID=xxx, TOKEN=yyy"  
-`-x`, `--proxy` → proxy address, e.g. 127.0.0.1:8080  
+`--cookies` → cookies to include in the session, e.g. `"PHPSESSID=xxx, TOKEN=yyy"`  
+`-x`, `--proxy` → proxy address, e.g. `127.0.0.1:8080`  
 `--csrf` → refresh CSRF token before each request  
-`-u`, `--upload` → upload directory to probe, e.g. /uploads/  
+`-u`, `--upload` → upload directory to probe, e.g. `/uploads/`  
+`--image-type` → valid file type used for the baseline upload test, default: `png`  
 `-v`, `--verbose` → increase output verbosity  
 `-A`, `--aggressive` → force FULL filename guessing (may generate many requests)  
 `--bypass` → enable filename-based bypass techniques
@@ -69,11 +69,11 @@ python3 Funchis.py http://target.com/upload.php
 ```
 
 ```bash
-#Basic scan: detect allowed extensions and try file access in upload directory
+# Basic scan: detect allowed extensions and try file access in upload directory
 python3 Funchis.py http://target.com/upload.php --upload uploads/ -v
 
-#Advanced scan: authenticated context + proxy + CSRF handling + aggressive filename guessing + bypass techniques
-python3 Funchis.py http://target.com --cookies "PHPSESSID=abcd1234" -x 127.0.0.1:8080 --csrf --upload files/ -A --bypass -v
+# Advanced scan: authenticated context + proxy + CSRF handling + aggressive filename guessing + bypass techniques
+python3 Funchis.py http://target.com --cookies "PHPSESSID=abcd1234" -x 127.0.0.1:8080 --csrf --upload files/ --image-type jpg -A --bypass -v
 ```
 
 ---
@@ -89,13 +89,14 @@ python3 Funchis.py http://target.com --cookies "PHPSESSID=abcd1234" -x 127.0.0.1
 ## 🔮 Roadmap
 
 - [x] Content-Type fuzzing and MIME validation bypass
-- [X] Improve detection of server-side file renaming logic and response analysis
+- [x] Improve detection of server-side file renaming logic and response analysis
+- [x] Advanced extension bypass techniques:
+  - Double extensions (`shell.php.png`, `shell.png.php`)
+  - Uncommon extensions and parsing inconsistencies
+- [x] Dynamic baseline file type selection with `--image-type`
 - [ ] Extend support to other backends
 - [ ] Advanced filename-based attack techniques:
   - Injection via filename (e.g. SQL injection, command injection)
-- [X] Advanced extension bypass techniques:
-  - Double extensions (`shell.php.png`, `shell.png.php`)
-  - Uncommon extensions and parsing inconsistencies
 
 ---
 

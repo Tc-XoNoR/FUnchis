@@ -1,6 +1,26 @@
 ## 📋 Changelog
 
-### v2.1  -  2026-04-30]
+### v2.2  -  2026-05-08
+
+#### Added
+
+- Added `--image-type` to choose the file type used for the valid upload test.
+
+#### Changed
+
+- Removed the hardcoded PNG baseline and added support for different file types.
+- Payload and bypass tests now use the selected file type instead of always using PNG.
+- Improved upload form parsing to support more input fields.
+- Renamed default test files from `test.*` to `kyra.*`.
+
+#### Fixed
+
+- Fixed redirect detection when redirects are automatically followed.
+- Fixed URL handling when the target URL contains query parameters.
+
+---
+
+### v2.1  -  2026-04-30
 
 #### Added
 
@@ -48,7 +68,7 @@
 
 ---
 
-### v1.1
+### v1.1  -   2026-04-17
 - Added MIME-type fuzzing with real magic bytes (JPEG, GIF, PNG, WebP, SVG, BMP, ICO, PDF)
 - Added `--skip-mimetype` flag to skip MIME scan
 - Improved baseline comparison using valid PNG
