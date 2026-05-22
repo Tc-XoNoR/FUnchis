@@ -1,5 +1,11 @@
 ## 📋 Changelog
 
+## v2.3   -  2026-05-22 
+
+- Fixed URL normalization to avoid appending trailing slashes to file-like targets such as `index.html` or `upload.php`.
+
+---
+
 ### v2.2  -  2026-05-08
 
 #### Added

@@ -6,7 +6,7 @@ import requests
 import re
 import argparse
 import hashlib
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 parser = argparse.ArgumentParser(description="File Upload Vulnerability Assessment Tool")
 parser.add_argument("URL", help="Target URL")
@@ -32,7 +32,7 @@ def banner():
 /_/    \__,_/_/ /_/\___/_/ /_/_/____/      
 
     File Upload Vulnerability Scanner
-    v2.2
+    v2.3
 
 """ + "\033[0m")
 
@@ -59,8 +59,11 @@ def regex_url(text_to_sanitize: str) -> str:
     if not text_to_sanitize.startswith(('http://', 'https://')):
         text_to_sanitize = "http://" + text_to_sanitize
 
-    if '?' not in text_to_sanitize and not text_to_sanitize.endswith('/'):
-        text_to_sanitize = text_to_sanitize + "/"
+    parsed = urlparse(text_to_sanitize)
+    last_part = parsed.path.rsplit("/", 1)[-1]
+
+    if not parsed.query and "." not in last_part and not text_to_sanitize.endswith('/'):
+        text_to_sanitize += "/"
 
     return text_to_sanitize
 
